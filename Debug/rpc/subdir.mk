@@ -3,6 +3,13 @@
 ################################################################################
 
 # Add inputs and outputs from these tool invocations to the build variables 
+O_SRCS += \
+../rpc/connection.o \
+../rpc/jsl_log.o \
+../rpc/pollmgr.o \
+../rpc/rpc.o \
+../rpc/thr_pool.o 
+
 CC_SRCS += \
 ../rpc/connection.cc \
 ../rpc/jsl_log.cc \
@@ -32,7 +39,7 @@ CC_DEPS += \
 rpc/%.o: ../rpc/%.cc
 	@echo 'Building file: $<'
 	@echo 'Invoking: GCC C++ Compiler'
-	g++ -O0 -g3 -Wall -c -fmessage-length=0 -MMD -MP -MF"$(@:%.o=%.d)" -MT"$(@:%.o=%.d)" -o "$@" "$<"
+	g++ -O0 -g3 -Wall -c -fmessage-length=0 -MMD -MP -MF"$(@:%.o=%.d)" -MT"$(@:%.o=%.d)" -o"$@" "$<"
 	@echo 'Finished building: $<'
 	@echo ' '
 
