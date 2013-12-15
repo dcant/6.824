@@ -9,18 +9,19 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 
-yfs_client::yfs_client()
-{
-    ec = new extent_client();
-
-}
-
 yfs_client::yfs_client(std::string extent_dst, std::string lock_dst)
 {
-    ec = new extent_client();
-    if (ec->put(1, "") != extent_protocol::OK)
-        printf("error init root dir\n"); // XYB: init root dir
+  ec = new extent_client(extent_dst);
+  //lc = new lock_client(lock_dst);
+  fc = new flush_call();
+  fc->ec = ec;
+  lc = new lock_client_cache(lock_dst,fc);
+  lc->acquire(1);
+  if (ec->put(1, "") != extent_protocol::OK)
+      printf("error init root dir\n"); // XYB: init root dir
+  lc->release(1);
 }
+
 
 yfs_client::inum
 yfs_client::n2i(std::string n)
@@ -40,10 +41,10 @@ yfs_client::filename(inum inum)
 }
 
 bool
-yfs_client::isfile(inum inum)
+yfs_client::_isfile(inum inum)
 {
     extent_protocol::attr a;
-
+    
     if (ec->getattr(inum, a) != extent_protocol::OK) {
         printf("error getting attr\n");
         return false;
@@ -57,16 +58,32 @@ yfs_client::isfile(inum inum)
     return false;
 }
 
-bool
-yfs_client::isdir(inum inum)
+bool yfs_client::isfile(inum inum)
 {
-    return ! isfile(inum);
+    bool found = false;
+    lc->acquire(inum);
+    found = _isfile(inum);
+    lc->release(inum);
+    return found;
+}
+
+bool
+yfs_client::isdir(inum inum, bool islocked)
+{
+    if(!islocked)
+        lc->acquire(inum);
+    bool ret = ! _isfile(inum);
+    if(!islocked)
+        lc->release(inum);
+    return ret;//! isfile(inum);
 }
 
 int
 yfs_client::getfile(inum inum, fileinfo &fin)
 {
     int r = OK;
+
+    lc->acquire(inum);
 
     printf("getfile %016llx\n", inum);
     extent_protocol::attr a;
@@ -82,6 +99,7 @@ yfs_client::getfile(inum inum, fileinfo &fin)
     printf("getfile %016llx -> sz %llu\n", inum, fin.size);
 
 release:
+    lc->release(inum);
     return r;
 }
 
@@ -89,6 +107,8 @@ int
 yfs_client::getdir(inum inum, dirinfo &din)
 {
     int r = OK;
+
+    lc->acquire(inum);
 
     printf("getdir %016llx\n", inum);
     extent_protocol::attr a;
@@ -101,6 +121,7 @@ yfs_client::getdir(inum inum, dirinfo &din)
     din.ctime = a.ctime;
 
 release:
+    lc->release(inum);
     return r;
 }
 
@@ -115,7 +136,7 @@ release:
 
 // Only support set size of attr
 int
-yfs_client::setattr(inum ino, size_t size)
+yfs_client::setattr(inum ino, size_t size, bool islocked)
 {
     int r = OK;
 
@@ -138,36 +159,64 @@ yfs_client::setattr(inum ino, size_t size)
     }
 
     return r;*/
-     extent_protocol::attr a;
-     if(ec->getattr(ino, a) != extent_protocol::OK){
+
+    if(!islocked)
+        lc->acquire(ino);
+
+    extent_protocol::attr a;
+    if(ec->getattr(ino, a) != extent_protocol::OK){
         r = IOERR;
+
+        if(!islocked)
+            lc->release(ino);
+
         return r;
-     }
-     if(a.size > size){
-        std::string str;
-        if(ec->get(ino, str) != extent_protocol::OK){
-            r = IOERR;
-            return r;
-        }
-        str = str.substr(0, size);
-        if(ec->put(ino, str) != extent_protocol::OK){
-            r = IOERR;
-            return r;
-        }
-     }
-     if(a.size < size){
-        std::string str;
-        if(ec->get(ino, str) != extent_protocol::OK){
-            r = IOERR;
-            return r;
-        }
-        str.resize(size, '\0');
-        if(ec->put(ino, str) != extent_protocol::OK){
-            r = IOERR;
-            return r;
-        }
-     }
-     a.size = size;
+    }
+    if(a.size > size){
+    std::string str;
+    if(ec->get(ino, str) != extent_protocol::OK){
+        r = IOERR;
+
+        if(!islocked)
+            lc->release(ino);
+
+        return r;
+    }
+    str = str.substr(0, size);
+    if(ec->put(ino, str) != extent_protocol::OK){
+        r = IOERR;
+
+        if(!islocked)
+            lc->release(ino);
+
+        return r;
+    }
+    }
+    if(a.size < size){
+    std::string str;
+    if(ec->get(ino, str) != extent_protocol::OK){
+        r = IOERR;
+
+        if(!islocked)
+            lc->release(ino);
+
+        return r;
+    }
+    str.resize(size, '\0');
+    if(ec->put(ino, str) != extent_protocol::OK){
+        r = IOERR;
+
+        if(!islocked)
+            lc->release(ino);
+
+        return r;
+    }
+    }
+    a.size = size;
+
+    if(!islocked)
+        lc->release(ino);
+
     return r;
 
 }
@@ -176,6 +225,7 @@ int
 yfs_client::create(inum parent, const char *name, mode_t mode, inum &ino_out, extent_protocol::types type)
 {
     int r = OK;
+    lc->acquire(parent);
 
     /*
      * your lab2 code goes here.
@@ -184,36 +234,42 @@ yfs_client::create(inum parent, const char *name, mode_t mode, inum &ino_out, ex
      */
     inum file_inum;
     bool found;
-    lookup(parent, name, found, file_inum);
+    lookup(parent, name, found, file_inum, true);
     if(found){
         r = EXIST;
+        lc->release(parent);
         return r;
     }
     if(ec->create(type, file_inum) != extent_protocol::OK){
         r = IOERR;
+        lc->release(parent);
         return r;
     }
     if (ec->put(file_inum, "") != extent_protocol::OK){
         r = IOERR;
+        lc->release(parent);
         return r;
     }
     std::string buf;
     if(ec->get(parent, buf) != extent_protocol::OK){
         r = IOERR;
+        lc->release(parent);
         return r;
     }
     buf.append("/" + filename(file_inum) + "/" + name);
     if (ec->put(parent, buf) != extent_protocol::OK){
         r = IOERR;
+        lc->release(parent);
         return r;
     }
     ino_out = file_inum;
 
+    lc->release(parent);
     return r;
 }
 
 int
-yfs_client::lookup(inum parent, const char *name, bool &found, inum &ino_out)
+yfs_client::lookup(inum parent, const char *name, bool &found, inum &ino_out, bool islocked)
 {
     int r = OK;
 
@@ -222,13 +278,31 @@ yfs_client::lookup(inum parent, const char *name, bool &found, inum &ino_out)
      * note: lookup file from parent dir according to name;
      * you should design the format of directory content.
      */
-    if(!isdir(parent)){
+    //printf("islocked %d\n", islocked);
+    if(!islocked)
+    {
+        lc->acquire(parent);
+    }
+
+    if(!isdir(parent, true)){
         r = IOERR;
+
+        if(!islocked)
+        {
+            lc->release(parent);
+        }
+
         return r;
     }
     std::list<dirent> list;
-    if(readdir(parent, list) != extent_protocol::OK){
+    if(readdir(parent, list, true) != extent_protocol::OK){
         r = IOERR;
+
+        if(!islocked)
+        {
+            lc->release(parent);
+        }
+
         return r;
     }
     std::string filename(name);
@@ -237,17 +311,28 @@ yfs_client::lookup(inum parent, const char *name, bool &found, inum &ino_out)
         if(it->name == filename){
             found = true;
             ino_out = it->inum;
+
+            if(!islocked)
+            {
+                lc->release(parent);
+            }
+
             return r;
         }
     }
     found = false;
     r = NOENT;
 
+    if(!islocked)
+    {
+        lc->release(parent);
+    }    
+
     return r;
 }
 
 int
-yfs_client::readdir(inum dir, std::list<dirent> &list)
+yfs_client::readdir(inum dir, std::list<dirent> &list, bool islocked)
 {
     int r = OK;
 
@@ -257,14 +342,33 @@ yfs_client::readdir(inum dir, std::list<dirent> &list)
      * and push the dirents to the list.
      */
 
-    if(!isdir(dir)){
+    //printf("islocked %d\n", islocked);
+    if(!islocked)
+    {
+        lc->acquire(dir);
+    }
+
+
+    if(!isdir(dir, true)){
         r = IOERR;
+
+        if(!islocked)
+        {
+            lc->release(dir);
+        }
+
         return r;
     }
     std::string buf;
     dirent d;
     if(ec->get(dir, buf) != extent_protocol::OK){
         r = IOERR;
+
+        if(!islocked)
+        {
+            lc->release(dir);
+        }
+
         return r;
     }
     int level = 0;
@@ -310,6 +414,11 @@ yfs_client::readdir(inum dir, std::list<dirent> &list)
         pos ++;
     }
 
+    if(!islocked)
+    {
+        lc->release(dir);
+    }
+
     return r;
 }
 
@@ -317,6 +426,7 @@ int
 yfs_client::read(inum ino, size_t size, off_t off, std::string &data)
 {
     int r = OK;
+    lc->acquire(ino);
 
     /*
      * your lab2 code goes here.
@@ -325,9 +435,11 @@ yfs_client::read(inum ino, size_t size, off_t off, std::string &data)
     std::string tmp;
     if(ec->get(ino, tmp) != extent_protocol::OK){
         r = IOERR;
+        lc->release(ino);
         return r;
     }
     data = tmp.substr(off, size);
+    lc->release(ino);
     return r;
 }
 
@@ -337,6 +449,7 @@ yfs_client::write(inum ino, size_t size, off_t off, const char *data,
         size_t &bytes_written)
 {
     int r = OK;
+    lc->acquire(ino);
 
     /*
      * your lab2 code goes here.
@@ -346,6 +459,7 @@ yfs_client::write(inum ino, size_t size, off_t off, const char *data,
     extent_protocol::attr a;
     if(ec->getattr(ino, a) != extent_protocol::OK){
         r = IOERR;
+        lc->release(ino);
         return r;
     }
     int ut_size;
@@ -360,20 +474,24 @@ yfs_client::write(inum ino, size_t size, off_t off, const char *data,
             bytes_written = size;
         }
     }
-    if(setattr(ino, ut_size) != extent_protocol::OK){
+    if(setattr(ino, ut_size, true) != extent_protocol::OK){
         r = IOERR;
+        lc->release(ino);
         return r;
     }
     std::string buf;
     if(ec->get(ino, buf) != extent_protocol::OK){
         r = IOERR;
+        lc->release(ino);
         return r;
     }
     buf.replace(off, size, data, size);
     if(ec->put(ino, buf) != extent_protocol::OK){
         r = IOERR;
+        lc->release(ino);
         return r;
     }
+    lc->release(ino);
     return r;
 
 }
@@ -382,6 +500,7 @@ yfs_client::write(inum ino, size_t size, off_t off, const char *data,
 int yfs_client::unlink(inum parent,const char *name)
 {
     int r = OK;
+    lc->acquire(parent);
 
     /*
      * your lab2 code goes here.
@@ -390,30 +509,36 @@ int yfs_client::unlink(inum parent,const char *name)
      */
     inum ino;
     bool found;
-    lookup(parent, name, found, ino);
+    lookup(parent, name, found, ino, true);
     if(!found){
         r == NOENT;
+        lc->release(parent);
         return r;
     }
-    if(isdir(ino)){
+    if(isdir(ino, true)){
         r = IOERR;
+        lc->release(parent);
         return r;
     }
     if (ec->remove(ino) != extent_protocol::OK){
         r = IOERR;
+        lc->release(parent);
         return r;
     }
     std::string buf;
     if (ec->get(parent, buf) != extent_protocol::OK){
         r = NOENT;
+        lc->release(parent);
         return r;
     }
     std::string tmp = "/" + filename(ino) + "/" + name;
     buf.erase(buf.find(tmp), tmp.length());
     if (ec->put(parent, buf) != extent_protocol::OK){
         r = IOERR;
+        lc->release(parent);
         return r;
     }
+    lc->release(parent);
     return r;
 }
 

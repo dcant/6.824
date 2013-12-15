@@ -135,7 +135,7 @@ fuseserver_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
 #if 1
         // Change the above line to "#if 1", and your code goes here
         // Note: fill st using getattr before fuse_reply_attr
-        if(yfs->setattr(ino,attr->st_size) != yfs_client::OK)
+        if(yfs->setattr(ino,attr->st_size,false) != yfs_client::OK)
         {
         	fuse_reply_err(req,ENOENT);
         	return;
@@ -336,7 +336,7 @@ fuseserver_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
      */
 
     yfs_client::inum i;
-    yfs->lookup(parent,name,found,i);
+    yfs->lookup(parent,name,found,i,false);
     if(found)
     {
     	struct stat a;
@@ -397,7 +397,7 @@ fuseserver_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
 
     printf("fuseserver_readdir\n");
 
-    if(!yfs->isdir(inum)){
+    if(!yfs->isdir(inum, false)){
         fuse_reply_err(req, ENOTDIR);
         return;
     }
@@ -412,7 +412,7 @@ fuseserver_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
      * and add it to the b data structure using dirbuf_add. 
      */
     std::list<yfs_client::dirent> list;
-    if(yfs->readdir(ino,list) != extent_protocol::OK)
+    if(yfs->readdir(ino,list,false) != extent_protocol::OK)
     {
     	free(b.p);
     	return;
@@ -541,24 +541,24 @@ main(int argc, char *argv[])
 
     setvbuf(stdout, NULL, _IONBF, 0);
 
-#if 0
     if(argc != 4){
         fprintf(stderr, "Usage: yfs_client <mountpoint> <port-extent-server> <port-lock-server>\n");
         exit(1);
     }
-#endif
+#if 0
     if(argc != 2){
         fprintf(stderr, "Usage: yfs_client <mountpoint>\n");
         exit(1);
     }
+#endif
     mountpoint = argv[1];
 
     srandom(getpid());
 
     myid = random();
 
-    // yfs = new yfs_client(argv[2], argv[3]);
-    yfs = new yfs_client();
+    yfs = new yfs_client(argv[2], argv[3]);
+    // yfs = new yfs_client();
 
     fuseserver_oper.getattr    = fuseserver_getattr;
     fuseserver_oper.statfs     = fuseserver_statfs;

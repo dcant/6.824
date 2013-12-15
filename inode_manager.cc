@@ -37,9 +37,9 @@ block_manager::alloc_block()
         read_block(BBLOCK(i), buf);
         for(int j=0; j<BPB; j++){
             if(i + j < skip)continue;
-            int test = 1 << (j%8);                     
+            int test = 1 << (j%8);                    
             if((buf[j/8] & test) == 0){                 
-                buf[j/8] |= (test);  
+                buf[j/8] |= (test);         
                 write_block(BBLOCK(i), buf);
                 char none[BLOCK_SIZE];
                 memset(none, 0, sizeof(char) * BLOCK_SIZE);
@@ -59,12 +59,12 @@ block_manager::free_block(uint32_t id)
     char buf[BLOCK_SIZE];
     read_block(block_num, buf);
     uint32_t bit_num = id - (block_num - BBLOCK(0)) * BPB;
-    char test = 1 << (bit_num%8);   
+    char test = 1 << (bit_num%8);                       
     if(buf[bit_num/8]&test == 0){
         printf("\tbm: this block has been free! \n");
         return;
     }
-    buf[bit_num/8] &= (~test);   
+    buf[bit_num/8] &= (~test);
     write_block(block_num, buf);
   return;
 }
@@ -116,7 +116,7 @@ inode_manager::alloc_inode(uint32_t type)
         char buf[BLOCK_SIZE];
         bm->read_block(IBLOCK(i, bm->sb.nblocks), buf);
         ino_disk = (struct inode*)buf + i%IPB;
-        if(ino_disk->type == 0){                  
+        if(ino_disk->type == 0){                            
             memset(ino_disk, 0, sizeof(struct inode));
             ino_disk->type = type;
             ino_disk->mtime = time(NULL);
@@ -206,7 +206,7 @@ inode_manager::read_file(uint32_t inum, char **buf_out, int *size)
         exit(0);
    }
    *size = ino->size;
-   int tmp_size = *size;            
+   int tmp_size = *size;                
    char *_buf_out = (char*)malloc(ino->size);
    char *_buf_out_head = _buf_out;
    for(uint32_t i=0; i<NDIRECT; i++){
@@ -259,7 +259,7 @@ inode_manager::write_file(uint32_t inum, const char *buf, int size)
         exit(0);
    }
 
-   int tmp_size = size;      
+   int tmp_size = size;               
    for(uint32_t i=0; i<NDIRECT; i++){
         if(tmp_size <= 0){
             if(ino->blocks[i] != 0){
@@ -273,11 +273,14 @@ inode_manager::write_file(uint32_t inum, const char *buf, int size)
         if(ino->blocks[i] == 0){
             ino->blocks[i] = bm->alloc_block();
         }
-        bm->write_block(ino->blocks[i], buf);
+        char tmp[BLOCK_SIZE];
+        memset(tmp,0,BLOCK_SIZE);
+        memcpy(tmp,buf,MIN(tmp_size,BLOCK_SIZE));
+        bm->write_block(ino->blocks[i], tmp);
         tmp_size -= BLOCK_SIZE;
         buf += BLOCK_SIZE;
    }
-   bool is_write_over = (tmp_size <= 0) ? 1 : 0;   
+   bool is_write_over = (tmp_size <= 0) ? 1 : 0;    
    if(tmp_size <= 0 && ino->blocks[NDIRECT] == 0){
    }else {
         if(ino->blocks[NDIRECT] == 0){
@@ -299,7 +302,10 @@ inode_manager::write_file(uint32_t inum, const char *buf, int size)
             if(*p == 0){
                 *p = bm->alloc_block();
             }
-            bm->write_block(*p, buf);
+            char tmp[BLOCK_SIZE];
+            memset(tmp,0,BLOCK_SIZE);
+            memcpy(tmp,buf,MIN(tmp_size,BLOCK_SIZE));
+            bm->write_block(*p, tmp);
             tmp_size -= BLOCK_SIZE;
             buf += BLOCK_SIZE;
         }
